@@ -14,19 +14,20 @@ enum ScanMode:Int{
 
 public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarcodeDelegate,FlutterStreamHandler {
     
-    public static var viewController = UIViewController()
+    private var registrar: FlutterPluginRegistrar?
+    private weak var scannerController: BarcodeScannerViewController?
     public static var lineColor:String=""
     public static var cancelButtonText:String=""
     public static var isShowFlashIcon:Bool=false
-    var pendingResult:FlutterResult!
+    var pendingResult:FlutterResult?
     public static var isContinuousScan:Bool=false
     static var barcodeStream:FlutterEventSink?=nil
     public static var scanMode = ScanMode.QR.index
     
     public static func register(with registrar: FlutterPluginRegistrar) {
-        viewController = (UIApplication.shared.delegate?.window??.rootViewController)!
         let channel = FlutterMethodChannel(name: "flutter_barcode_scanner", binaryMessenger: registrar.messenger())
         let instance = SwiftFlutterBarcodeScannerPlugin()
+        instance.registrar = registrar
         registrar.addMethodCallDelegate(instance, channel: channel)
         let eventChannel=FlutterEventChannel(name: "flutter_barcode_scanner_receiver", binaryMessenger: registrar.messenger())
         eventChannel.setStreamHandler(instance)
@@ -56,6 +57,12 @@ public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarc
     }
     
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard scannerController == nil else {
+            result(FlutterError(code: "SCAN_IN_PROGRESS",
+                                message: "A barcode scan is already in progress.",
+                                details: nil))
+            return
+        }
         let args:Dictionary<String, AnyObject> = call.arguments as! Dictionary<String, AnyObject>;
         if let colorCode = args["lineColor"] as? String{
             SwiftFlutterBarcodeScannerPlugin.lineColor = colorCode
@@ -91,6 +98,7 @@ public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarc
         pendingResult=result
         let controller = BarcodeScannerViewController()
         controller.delegate = self
+        scannerController = controller
         
         if #available(iOS 13.0, *) {
             controller.modalPresentationStyle = .fullScreen
@@ -98,18 +106,12 @@ public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarc
         
         if checkCameraAvailability(){
             if checkForCameraPermission() {
-                SwiftFlutterBarcodeScannerPlugin.viewController.present(controller
-                                                                        , animated: true) {
-                    
-                }
+                present(controller)
             }else {
                 AVCaptureDevice.requestAccess(for: .video) { success in
                     DispatchQueue.main.async {
                         if success {
-                            SwiftFlutterBarcodeScannerPlugin.viewController.present(controller
-                                                                                    , animated: true) {
-                                
-                            }
+                            self.present(controller)
                         } else {
                             let alert = UIAlertController(title: "Action needed", message: "Please grant camera permission to use barcode scanner", preferredStyle: .alert)
                             
@@ -119,7 +121,7 @@ public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarc
                             
                             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
                             
-                            SwiftFlutterBarcodeScannerPlugin.viewController.present(alert, animated: true)
+                            self.present(alert)
                         }
                     }
                 }}
@@ -129,15 +131,41 @@ public class SwiftFlutterBarcodeScannerPlugin: NSObject, FlutterPlugin, ScanBarc
     }
     
     public func userDidScanWith(barcode: String){
-        pendingResult(barcode)
+        completePendingResult(barcode)
     }
-    
+
+    private func completePendingResult(_ value: Any?) {
+        let result = pendingResult
+        pendingResult = nil
+        result?(value)
+    }
+
+    private func present(_ controller: UIViewController) {
+        // Resolve this engine's presenter at use time; registration can precede scene setup.
+        guard var presenter = registrar?.viewController else {
+            completePendingResult(FlutterError(code: "NO_VIEW_CONTROLLER",
+                                               message: "No attached Flutter view controller is available.",
+                                               details: nil))
+            return
+        }
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        guard presenter.viewIfLoaded?.window != nil else {
+            completePendingResult(FlutterError(code: "NO_VIEW_CONTROLLER",
+                                               message: "No attached Flutter view controller is available.",
+                                               details: nil))
+            return
+        }
+        presenter.present(controller, animated: true)
+    }
+
     /// Show common alert dialog
     func showAlertDialog(title:String,message:String){
         let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
         let alertAction = UIAlertAction(title: "Ok", style: .default, handler: nil)
         alertController.addAction(alertAction)
-        SwiftFlutterBarcodeScannerPlugin.viewController.present(alertController, animated: true, completion: nil)
+        present(alertController)
     }
 }
 
